@@ -14,6 +14,23 @@ import {
   getStage,
 } from './game/config';
 import { Player, preloadSpriteSheets } from './game/player';
+import {
+  CAMERA_PREVIEW_HEIGHT,
+  CAMERA_PREVIEW_WIDTH,
+  CAMERA_STREAM_CONSTRAINTS,
+  createLaneGestureHistories,
+  createPoseLandmarker,
+  createPoseTrackerState,
+  drawDebugCameraPreview,
+  getCameraStatusLabel,
+  resetLaneGestureHistory,
+  resolveTrackedLanes,
+  stopMediaStream,
+  updateLaneGesture,
+  type CameraStatus,
+  type ControlMode,
+  type LaneAssignment,
+} from './game/vision';
 
 type AppPhase = 'loading' | 'playing';
 
@@ -37,6 +54,8 @@ const INITIAL_HUD: HudState = {
 const BOOT_MODE: GameMode = '2p';
 const MIN_LOADING_DURATION_MS = 2200;
 const INITIAL_PROGRESS = 0.06;
+const ACTIVE_TOUCH_LANES: [boolean, boolean] = [true, true];
+const INACTIVE_LANES: [boolean, boolean] = [false, false];
 
 function createRuntime(players: Player[] = []): RuntimeState {
   return {
@@ -146,6 +165,49 @@ function preloadVideoElement(video: HTMLVideoElement | null, onAssetLoaded?: () 
   });
 }
 
+function lanesMatch(current: [boolean, boolean], next: [boolean, boolean]) {
+  return current[0] === next[0] && current[1] === next[1];
+}
+
+function describeVisibilityMode(
+  trackedPeopleCount: number,
+  trackedLanes: [boolean, boolean],
+  primaryCharacter: string,
+  secondaryCharacter: string,
+) {
+  if (trackedPeopleCount >= 2) {
+    return {
+      detail: `${primaryCharacter} on the left and ${secondaryCharacter} on the right are both live.`,
+      headline: '2 People Tracked · Two Player Visibility',
+      summary: '2 Players',
+    };
+  }
+
+  if (trackedPeopleCount === 1) {
+    if (trackedLanes[0]) {
+      return {
+        detail: `Arm movement runs ${primaryCharacter}. Hold still to stop. Hop to jump.`,
+        headline: `1 Person Tracked · ${primaryCharacter} Active`,
+        summary: 'Single Player',
+      };
+    }
+
+    if (trackedLanes[1]) {
+      return {
+        detail: `Arm movement runs ${secondaryCharacter}. Hold still to stop. Hop to jump.`,
+        headline: `1 Person Tracked · ${secondaryCharacter} Active`,
+        summary: 'Single Player',
+      };
+    }
+  }
+
+  return {
+    detail: `Step into frame. Left person controls ${primaryCharacter}, right person controls ${secondaryCharacter}.`,
+    headline: 'Waiting For Players',
+    summary: 'Waiting',
+  };
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frozenCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -155,17 +217,37 @@ export default function App() {
     2: null,
     3: null,
   });
+  const webcamRef = useRef<HTMLVideoElement>(null);
+  const debugCanvasRef = useRef<HTMLCanvasElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const poseTrackerRef = useRef(createPoseTrackerState());
+  const laneHistoriesRef = useRef(createLaneGestureHistories());
 
   const [phase, setPhase] = useState<AppPhase>('loading');
   const [loadingProgress, setLoadingProgress] = useState(INITIAL_PROGRESS);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = useState(0);
   const [hud, setHud] = useState<HudState>(INITIAL_HUD);
+  const [showDebugMenu, setShowDebugMenu] = useState(false);
+  const [controlMode, setControlMode] = useState<ControlMode>('touch');
+  const [showCameraView, setShowCameraView] = useState(false);
+  const [cameraStatus, setCameraStatus] = useState<CameraStatus>('inactive');
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [trackedPeopleCount, setTrackedPeopleCount] = useState(2);
+  const [trackedLanes, setTrackedLanes] = useState<[boolean, boolean]>(ACTIVE_TOUCH_LANES);
 
   const modeConfig = MODE_OPTIONS[BOOT_MODE];
   const primaryPlayerConfig = modeConfig.players[0];
   const secondaryPlayerConfig = modeConfig.players[1] ?? modeConfig.players[0];
   const loadingPercent = Math.round(Math.min(1, Math.max(INITIAL_PROGRESS, loadingProgress)) * 100);
+  const activeLaneFlags = controlMode === 'visibility' ? trackedLanes : ACTIVE_TOUCH_LANES;
+  const visibilityMode = describeVisibilityMode(
+    trackedPeopleCount,
+    trackedLanes,
+    CHARACTER_NAMES[primaryPlayerConfig.character],
+    CHARACTER_NAMES[secondaryPlayerConfig.character],
+  );
+  const cameraStatusLabel = getCameraStatusLabel(cameraStatus, cameraError);
 
   useEffect(() => {
     if (frozenCanvasRef.current) {
@@ -177,6 +259,21 @@ export default function App() {
     frozenCanvas.height = CANVAS_HEIGHT;
     frozenCanvasRef.current = frozenCanvas;
   }, []);
+
+  const syncTrackedState = useEffectEvent((peopleCount: number, nextLanes: [boolean, boolean]) => {
+    setTrackedPeopleCount((current) => (current === peopleCount ? current : peopleCount));
+    setTrackedLanes((current) => (lanesMatch(current, nextLanes) ? current : nextLanes));
+  });
+
+  const resetPlayerInputs = useEffectEvent(() => {
+    runtimeRef.current.players.forEach((player) => player.releaseRun());
+  });
+
+  const resetLaneTracking = useEffectEvent((nextMode: ControlMode) => {
+    laneHistoriesRef.current.forEach((history) => resetLaneGestureHistory(history));
+    resetPlayerInputs();
+    syncTrackedState(nextMode === 'visibility' ? 0 : 2, nextMode === 'visibility' ? INACTIVE_LANES : ACTIVE_TOUCH_LANES);
+  });
 
   const syncHud = useEffectEvent((runtime: RuntimeState) => {
     const nextScores: [number, number] = [
@@ -203,6 +300,7 @@ export default function App() {
   const bootIntoGame = useEffectEvent(() => {
     runtimeRef.current = createRuntime(createPlayersForMode(BOOT_MODE));
     setHud(INITIAL_HUD);
+    resetLaneTracking(controlMode);
 
     STAGES.forEach((stage) => {
       const video = videoRefs.current[stage.id];
@@ -387,7 +485,7 @@ export default function App() {
   }, [phase]);
 
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (phase !== 'playing') {
+    if (phase !== 'playing' || controlMode !== 'touch') {
       return;
     }
 
@@ -413,7 +511,7 @@ export default function App() {
   });
 
   const handleKeyUp = useEffectEvent((event: KeyboardEvent) => {
-    if (phase !== 'playing') {
+    if (phase !== 'playing' || controlMode !== 'touch') {
       return;
     }
 
@@ -438,6 +536,195 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    resetLaneTracking(controlMode);
+  }, [controlMode]);
+
+  useEffect(() => {
+    if (showCameraView || !debugCanvasRef.current) {
+      return;
+    }
+
+    const context = debugCanvasRef.current.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    context.clearRect(0, 0, debugCanvasRef.current.width, debugCanvasRef.current.height);
+  }, [showCameraView]);
+
+  useEffect(() => {
+    if (phase !== 'playing' || controlMode !== 'visibility') {
+      stopMediaStream(cameraStreamRef.current);
+      cameraStreamRef.current = null;
+
+      if (webcamRef.current) {
+        webcamRef.current.srcObject = null;
+      }
+
+      poseTrackerRef.current.lastCaptureTime = -1;
+      poseTrackerRef.current.lastVideoTime = -1;
+      setCameraStatus('inactive');
+      return;
+    }
+
+    let cancelled = false;
+
+    const startVisibilityControls = async () => {
+      try {
+        setCameraError(null);
+
+        if (!poseTrackerRef.current.landmarker) {
+          setCameraStatus('loading-model');
+          poseTrackerRef.current.landmarker = await createPoseLandmarker();
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('This browser does not support camera access.');
+        }
+
+        setCameraStatus('starting-camera');
+        const stream = await navigator.mediaDevices.getUserMedia(CAMERA_STREAM_CONSTRAINTS);
+
+        if (cancelled) {
+          stopMediaStream(stream);
+          return;
+        }
+
+        cameraStreamRef.current = stream;
+
+        const cameraElement = webcamRef.current;
+        if (!cameraElement) {
+          throw new Error('Missing camera preview element.');
+        }
+
+        cameraElement.srcObject = stream;
+        await cameraElement.play().catch(() => {});
+
+        if (cancelled) {
+          return;
+        }
+
+        setCameraStatus('active');
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        stopMediaStream(cameraStreamRef.current);
+        cameraStreamRef.current = null;
+
+        if (webcamRef.current) {
+          webcamRef.current.srcObject = null;
+        }
+
+        setCameraError(error instanceof Error ? error.message : 'Unable to start visibility mode.');
+        setCameraStatus('error');
+      }
+    };
+
+    void startVisibilityControls();
+
+    return () => {
+      cancelled = true;
+      stopMediaStream(cameraStreamRef.current);
+      cameraStreamRef.current = null;
+
+      if (webcamRef.current) {
+        webcamRef.current.srcObject = null;
+      }
+    };
+  }, [controlMode, phase]);
+
+  const applyVisibilityAssignments = useEffectEvent((assignments: ReadonlyArray<LaneAssignment>, nowMs: number) => {
+    const nextLanes: [boolean, boolean] = [false, false];
+    const assignmentsByLane: [LaneAssignment | null, LaneAssignment | null] = [null, null];
+
+    assignments.forEach((assignment) => {
+      assignmentsByLane[assignment.laneIndex] = assignment;
+      nextLanes[assignment.laneIndex] = true;
+    });
+
+    runtimeRef.current.players.forEach((player, index) => {
+      const assignment = assignmentsByLane[index as 0 | 1];
+      const history = laneHistoriesRef.current[index as 0 | 1];
+
+      if (!assignment) {
+        player.releaseRun();
+        resetLaneGestureHistory(history);
+        return;
+      }
+
+      const { isRunning, jumpTriggered } = updateLaneGesture(history, assignment.pose, nowMs);
+
+      if (isRunning) {
+        player.pressRun();
+      } else {
+        player.releaseRun();
+      }
+
+      if (jumpTriggered) {
+        player.pressJump();
+      }
+    });
+
+    syncTrackedState(assignments.length, nextLanes);
+  });
+
+  useEffect(() => {
+    if (phase !== 'playing' || controlMode !== 'visibility' || cameraStatus !== 'active') {
+      return;
+    }
+
+    let frameId = 0;
+
+    const step = () => {
+      frameId = window.requestAnimationFrame(step);
+
+      const cameraElement = webcamRef.current;
+      const landmarker = poseTrackerRef.current.landmarker;
+      if (!cameraElement || !landmarker || cameraElement.readyState < 2) {
+        return;
+      }
+
+      if (poseTrackerRef.current.lastVideoTime === cameraElement.currentTime) {
+        return;
+      }
+
+      poseTrackerRef.current.lastVideoTime = cameraElement.currentTime;
+
+      let nowMs = performance.now();
+      if (nowMs <= poseTrackerRef.current.lastCaptureTime) {
+        nowMs = poseTrackerRef.current.lastCaptureTime + 0.1;
+      }
+
+      poseTrackerRef.current.lastCaptureTime = nowMs;
+
+      const results = landmarker.detectForVideo(cameraElement, nowMs);
+      const assignments = resolveTrackedLanes(results.landmarks ?? []);
+
+      if (showCameraView && debugCanvasRef.current) {
+        drawDebugCameraPreview({
+          assignments,
+          canvas: debugCanvasRef.current,
+          video: cameraElement,
+        });
+      }
+
+      applyVisibilityAssignments(assignments, nowMs);
+    };
+
+    frameId = window.requestAnimationFrame(step);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [applyVisibilityAssignments, cameraStatus, controlMode, phase, showCameraView]);
+
   return (
     <div className={phase === 'loading' ? 'loading-shell' : 'game-shell'}>
       {phase === 'loading' ? (
@@ -445,13 +732,13 @@ export default function App() {
           <span className="loading-kicker">Woot Town Runner</span>
           <h1>Loading The Magical Ride</h1>
           <p>
-            Preparing the stitched town videos, warming up both runners, and syncing the two-player
-            stage so it opens ready to play.
+            Preparing the stitched town videos, warming up both runners, and getting touch plus
+            visibility controls ready for the launch.
           </p>
 
           <div className="loading-tags">
             <span>2 Player Mode</span>
-            <span>Video Sync</span>
+            <span>Pose Tracking</span>
             <span>Woot Town Boot</span>
           </div>
 
@@ -478,85 +765,192 @@ export default function App() {
           ) : null}
         </div>
       ) : (
-        <main className="game-stage">
-          <canvas ref={canvasRef} className="game-canvas" width={CANVAS_WIDTH} height={CANVAS_HEIGHT} />
+        <>
+          <button
+            className={`debug-toggle ${showDebugMenu ? 'debug-toggle--open' : ''}`}
+            onClick={() => setShowDebugMenu((current) => !current)}
+            type="button"
+          >
+            Debug
+          </button>
 
-          <div className="hud-row hud-row--top">
-            <div className="hud-cluster">
-              {modeConfig.players.map((player, index) => (
-                <div
-                  key={`${player.character}-${index}`}
-                  className={`hud-pill ${index === 0 ? 'hud-pill--primary' : 'hud-pill--secondary'}`}
+          {showDebugMenu ? (
+            <aside className="debug-panel">
+              <div className="debug-panel__header">
+                <h2>Debug Menu</h2>
+                <button
+                  className="debug-panel__close"
+                  onClick={() => setShowDebugMenu(false)}
+                  type="button"
                 >
-                  <div className="hud-pill__label">
-                    P{index + 1} · {CHARACTER_NAMES[player.character]}
-                  </div>
-                  <div className="hud-pill__value">{hud.scores[index]}</div>
+                  Close
+                </button>
+              </div>
+
+              <div className="debug-panel__group">
+                <span className="debug-panel__label">Controls</span>
+                <div className="debug-segmented">
+                  <button
+                    className={`debug-segmented__button ${
+                      controlMode === 'touch' ? 'debug-segmented__button--active' : ''
+                    }`}
+                    onClick={() => setControlMode('touch')}
+                    type="button"
+                  >
+                    Touch
+                  </button>
+                  <button
+                    className={`debug-segmented__button ${
+                      controlMode === 'visibility' ? 'debug-segmented__button--active' : ''
+                    }`}
+                    onClick={() => setControlMode('visibility')}
+                    type="button"
+                  >
+                    Visibility
+                  </button>
                 </div>
-              ))}
-            </div>
-
-            <div className="hud-cluster hud-cluster--right">
-              <div className="hud-pill hud-pill--stage">
-                <div className="hud-pill__label">Current Loop</div>
-                <div className="hud-pill__value">{getStage(hud.stageId).label}</div>
               </div>
-              <button className="hud-action" onClick={restartRun}>
-                Reset Run
-              </button>
-            </div>
-          </div>
 
-          <div className="hud-row hud-row--bottom">
-            <div className="control-panel control-panel--primary">
-              <span className="control-panel__label">
-                P1 · {CHARACTER_NAMES[primaryPlayerConfig.character]}
-              </span>
-              <div className="control-panel__buttons">
-                <button
-                  className="control-button control-button--run"
-                  onPointerDown={() => pressRun(0)}
-                  onPointerUp={() => releaseRun(0)}
-                  onPointerLeave={() => releaseRun(0)}
-                  onPointerCancel={() => releaseRun(0)}
-                >
-                  Run
-                </button>
-                <button className="control-button control-button--jump" onPointerDown={() => pressJump(0)}>
-                  Jump
+              {controlMode === 'visibility' ? (
+                <label className="debug-checkbox">
+                  <input
+                    checked={showCameraView}
+                    onChange={(event) => setShowCameraView(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>Camera View</span>
+                </label>
+              ) : null}
+
+              <div className="debug-panel__note">
+                <strong>{cameraStatusLabel}</strong>
+                <span>
+                  {controlMode === 'visibility'
+                    ? visibilityMode.detail
+                    : 'Touch mode keeps both unicorn lanes available for on-screen buttons and keyboard input.'}
+                </span>
+              </div>
+            </aside>
+          ) : null}
+
+          <main className="game-stage">
+            <canvas ref={canvasRef} className="game-canvas" width={CANVAS_WIDTH} height={CANVAS_HEIGHT} />
+
+            <div className="hud-row hud-row--top">
+              <div className="hud-cluster">
+                {modeConfig.players.map((player, index) => (
+                  <div
+                    key={`${player.character}-${index}`}
+                    className={`hud-pill ${index === 0 ? 'hud-pill--primary' : 'hud-pill--secondary'} ${
+                      controlMode === 'visibility'
+                        ? activeLaneFlags[index] ? 'hud-pill--tracked' : 'hud-pill--idle'
+                        : ''
+                    }`}
+                  >
+                    <div className="hud-pill__label">
+                      P{index + 1} · {CHARACTER_NAMES[player.character]}
+                    </div>
+                    <div className="hud-pill__value">{hud.scores[index]}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hud-cluster hud-cluster--right">
+                <div className="hud-pill hud-pill--stage">
+                  <div className="hud-pill__label">Current Loop</div>
+                  <div className="hud-pill__value">{getStage(hud.stageId).label}</div>
+                </div>
+
+                <div className="hud-pill hud-pill--mode">
+                  <div className="hud-pill__label">
+                    {controlMode === 'visibility' ? 'Visibility Mode' : 'Control Mode'}
+                  </div>
+                  <div className="hud-pill__value">
+                    {controlMode === 'visibility' ? visibilityMode.summary : 'Touch'}
+                  </div>
+                </div>
+
+                <button className="hud-action" onClick={restartRun} type="button">
+                  Reset Run
                 </button>
               </div>
             </div>
 
-            <div className="hud-hint">
-              <span>2 Player Mode</span>
-              <strong>{modeConfig.hint}</strong>
-            </div>
+            {controlMode === 'touch' ? (
+              <div className="hud-row hud-row--bottom">
+                <>
+                  <div className="control-panel control-panel--primary">
+                    <span className="control-panel__label">
+                      P1 · {CHARACTER_NAMES[primaryPlayerConfig.character]}
+                    </span>
+                    <div className="control-panel__buttons">
+                      <button
+                        className="control-button control-button--run"
+                        onPointerDown={() => pressRun(0)}
+                        onPointerUp={() => releaseRun(0)}
+                        onPointerLeave={() => releaseRun(0)}
+                        onPointerCancel={() => releaseRun(0)}
+                        type="button"
+                      >
+                        Run
+                      </button>
+                      <button
+                        className="control-button control-button--jump"
+                        onPointerDown={() => pressJump(0)}
+                        type="button"
+                      >
+                        Jump
+                      </button>
+                    </div>
+                  </div>
 
-            <div className="control-panel control-panel--secondary">
-              <span className="control-panel__label">
-                P2 · {CHARACTER_NAMES[secondaryPlayerConfig.character]}
-              </span>
-              <div className="control-panel__buttons">
-                <button
-                  className="control-button control-button--alt-run"
-                  onPointerDown={() => pressRun(1)}
-                  onPointerUp={() => releaseRun(1)}
-                  onPointerLeave={() => releaseRun(1)}
-                  onPointerCancel={() => releaseRun(1)}
-                >
-                  Run
-                </button>
-                <button
-                  className="control-button control-button--alt-jump"
-                  onPointerDown={() => pressJump(1)}
-                >
-                  Jump
-                </button>
+                  <div className="hud-hint">
+                    <span>Touch Mode</span>
+                    <strong>{modeConfig.hint}</strong>
+                  </div>
+
+                  <div className="control-panel control-panel--secondary">
+                    <span className="control-panel__label">
+                      P2 · {CHARACTER_NAMES[secondaryPlayerConfig.character]}
+                    </span>
+                    <div className="control-panel__buttons">
+                      <button
+                        className="control-button control-button--alt-run"
+                        onPointerDown={() => pressRun(1)}
+                        onPointerUp={() => releaseRun(1)}
+                        onPointerLeave={() => releaseRun(1)}
+                        onPointerCancel={() => releaseRun(1)}
+                        type="button"
+                      >
+                        Run
+                      </button>
+                      <button
+                        className="control-button control-button--alt-jump"
+                        onPointerDown={() => pressJump(1)}
+                        type="button"
+                      >
+                        Jump
+                      </button>
+                    </div>
+                  </div>
+                </>
               </div>
-            </div>
-          </div>
-        </main>
+            ) : null}
+
+            {controlMode === 'visibility' && showCameraView ? (
+              <div className="camera-preview">
+                <canvas
+                  ref={debugCanvasRef}
+                  className="camera-preview__canvas"
+                  height={CAMERA_PREVIEW_HEIGHT}
+                  width={CAMERA_PREVIEW_WIDTH}
+                />
+              </div>
+            ) : null}
+          </main>
+
+          <video ref={webcamRef} autoPlay className="asset-video asset-video--camera" muted playsInline />
+        </>
       )}
 
       {STAGES.map((stage) => (
