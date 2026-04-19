@@ -241,6 +241,12 @@ export default function App() {
   const secondaryPlayerConfig = modeConfig.players[1] ?? modeConfig.players[0];
   const loadingPercent = Math.round(Math.min(1, Math.max(INITIAL_PROGRESS, loadingProgress)) * 100);
   const activeLaneFlags = controlMode === 'visibility' ? trackedLanes : ACTIVE_TOUCH_LANES;
+  const visiblePlayerIndexes =
+    controlMode === 'visibility'
+      ? modeConfig.players
+          .map((_, index) => index as 0 | 1)
+          .filter((index) => activeLaneFlags[index])
+      : modeConfig.players.map((_, index) => index as 0 | 1);
   const visibilityMode = describeVisibilityMode(
     trackedPeopleCount,
     trackedLanes,
@@ -463,7 +469,13 @@ export default function App() {
       drawFallbackBackground(ctx);
     }
 
-    runtime.players.forEach((player) => player.draw(ctx));
+    runtime.players.forEach((player, index) => {
+      if (controlMode === 'visibility' && !activeLaneFlags[index as 0 | 1]) {
+        return;
+      }
+
+      player.draw(ctx);
+    });
     syncHud(runtime);
   });
 
@@ -838,7 +850,9 @@ export default function App() {
 
             <div className="hud-row hud-row--top">
               <div className="hud-cluster">
-                {modeConfig.players.map((player, index) => (
+                {visiblePlayerIndexes.map((index) => {
+                  const player = modeConfig.players[index]!;
+                  return (
                   <div
                     key={`${player.character}-${index}`}
                     className={`hud-pill ${index === 0 ? 'hud-pill--primary' : 'hud-pill--secondary'} ${
@@ -852,7 +866,8 @@ export default function App() {
                     </div>
                     <div className="hud-pill__value">{hud.scores[index]}</div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="hud-cluster hud-cluster--right">
