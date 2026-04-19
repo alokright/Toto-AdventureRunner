@@ -165,6 +165,33 @@ function preloadVideoElement(video: HTMLVideoElement | null, onAssetLoaded?: () 
   });
 }
 
+function waitForVideoMetadata(video: HTMLVideoElement) {
+  return new Promise<void>((resolve, reject) => {
+    if (video.readyState >= 1 && video.videoWidth > 0 && video.videoHeight > 0) {
+      resolve();
+      return;
+    }
+
+    const handleLoadedMetadata = () => {
+      cleanup();
+      resolve();
+    };
+
+    const handleError = () => {
+      cleanup();
+      reject(new Error('Camera preview metadata failed to load.'));
+    };
+
+    const cleanup = () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('error', handleError);
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+    video.addEventListener('error', handleError, { once: true });
+  });
+}
+
 function lanesMatch(current: [boolean, boolean], next: [boolean, boolean]) {
   return current[0] === next[0] && current[1] === next[1];
 }
@@ -222,6 +249,7 @@ export default function App() {
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const poseTrackerRef = useRef(createPoseTrackerState());
   const laneHistoriesRef = useRef(createLaneGestureHistories());
+  const singlePlayerLaneLockRef = useRef<0 | 1 | null>(null);
 
   const [phase, setPhase] = useState<AppPhase>('loading');
   const [loadingProgress, setLoadingProgress] = useState(INITIAL_PROGRESS);
@@ -277,6 +305,7 @@ export default function App() {
 
   const resetLaneTracking = useEffectEvent((nextMode: ControlMode) => {
     laneHistoriesRef.current.forEach((history) => resetLaneGestureHistory(history));
+    singlePlayerLaneLockRef.current = null;
     resetPlayerInputs();
     syncTrackedState(nextMode === 'visibility' ? 0 : 2, nextMode === 'visibility' ? INACTIVE_LANES : ACTIVE_TOUCH_LANES);
   });
@@ -614,8 +643,11 @@ export default function App() {
           throw new Error('Missing camera preview element.');
         }
 
+        cameraElement.muted = true;
+        cameraElement.playsInline = true;
         cameraElement.srcObject = stream;
-        await cameraElement.play().catch(() => {});
+        await waitForVideoMetadata(cameraElement);
+        await cameraElement.play();
 
         if (cancelled) {
           return;
@@ -716,8 +748,32 @@ export default function App() {
 
       poseTrackerRef.current.lastCaptureTime = nowMs;
 
-      const results = landmarker.detectForVideo(cameraElement, nowMs);
-      const assignments = resolveTrackedLanes(results.landmarks ?? []);
+      let assignments: ReadonlyArray<LaneAssignment> = [];
+
+      try {
+        const results = landmarker.detectForVideo(cameraElement, nowMs);
+        assignments = resolveTrackedLanes(results.landmarks ?? []);
+
+        if (assignments.length === 0) {
+          singlePlayerLaneLockRef.current = null;
+        } else if (assignments.length === 1) {
+          const lockedLane = singlePlayerLaneLockRef.current;
+          const assignment = assignments[0];
+          const stableLane = lockedLane ?? assignment.laneIndex;
+
+          assignments = [
+            {
+              ...assignment,
+              laneIndex: stableLane,
+            },
+          ];
+          singlePlayerLaneLockRef.current = stableLane;
+        } else {
+          singlePlayerLaneLockRef.current = null;
+        }
+      } catch (error) {
+        setCameraError(error instanceof Error ? error.message : 'Visibility tracking paused.');
+      }
 
       if (showCameraView && debugCanvasRef.current) {
         drawDebugCameraPreview({
@@ -964,7 +1020,7 @@ export default function App() {
             ) : null}
           </main>
 
-          <video ref={webcamRef} autoPlay className="asset-video asset-video--camera" muted playsInline />
+          <video ref={webcamRef} autoPlay className="camera-source-video" muted playsInline />
         </>
       )}
 

@@ -6,12 +6,20 @@ const POSE_MODEL_ASSET_URL =
 
 const WRIST_LEFT_INDEX = 15;
 const WRIST_RIGHT_INDEX = 16;
+const SHOULDER_LEFT_INDEX = 11;
+const SHOULDER_RIGHT_INDEX = 12;
 const HIP_LEFT_INDEX = 23;
 const HIP_RIGHT_INDEX = 24;
+const ANKLE_LEFT_INDEX = 27;
+const ANKLE_RIGHT_INDEX = 28;
 
 const HISTORY_SIZE = 10;
 const RUN_VARIANCE_THRESHOLD = 0.015;
-const JUMP_DELTA_THRESHOLD = 0.035;
+const JUMP_HISTORY_MIN_SAMPLES = 6;
+const JUMP_MIN_ANKLE_DELTA = 0.02;
+const JUMP_MIN_HIP_DELTA = 0.012;
+const JUMP_ANKLE_RATIO = 0.14;
+const JUMP_HIP_RATIO = 0.08;
 const JUMP_COOLDOWN_MS = 800;
 const MIRRORED_LANE_SPLIT = 0.5;
 
@@ -44,6 +52,7 @@ export type LaneAssignment = {
 };
 
 export type LaneGestureHistory = {
+  anklesY: number[];
   hipsY: number[];
   lastJumpTime: number;
   wristsY: number[];
@@ -83,15 +92,20 @@ function getPoseCenterX(pose: PoseSample) {
 }
 
 function getPoseMetrics(pose: PoseSample) {
+  const shouldersY = average([pose[SHOULDER_LEFT_INDEX]?.y, pose[SHOULDER_RIGHT_INDEX]?.y]);
   const hipsY = average([pose[HIP_LEFT_INDEX]?.y, pose[HIP_RIGHT_INDEX]?.y]);
+  const anklesY = average([pose[ANKLE_LEFT_INDEX]?.y, pose[ANKLE_RIGHT_INDEX]?.y]);
   const wristsY = average([pose[WRIST_LEFT_INDEX]?.y, pose[WRIST_RIGHT_INDEX]?.y]);
 
-  if (hipsY === null || wristsY === null) {
+  if (shouldersY === null || hipsY === null || anklesY === null || wristsY === null) {
     return null;
   }
 
   return {
+    anklesY,
     hipsY,
+    shouldersY,
+    torsoHeight: Math.max(0.08, hipsY - shouldersY),
     wristsY,
   };
 }
@@ -113,11 +127,13 @@ export function createPoseTrackerState(): PoseTrackerState {
 export function createLaneGestureHistories(): [LaneGestureHistory, LaneGestureHistory] {
   return [
     {
+      anklesY: [],
       hipsY: [],
       lastJumpTime: 0,
       wristsY: [],
     },
     {
+      anklesY: [],
       hipsY: [],
       lastJumpTime: 0,
       wristsY: [],
@@ -126,6 +142,7 @@ export function createLaneGestureHistories(): [LaneGestureHistory, LaneGestureHi
 }
 
 export function resetLaneGestureHistory(history: LaneGestureHistory) {
+  history.anklesY.length = 0;
   history.hipsY.length = 0;
   history.lastJumpTime = 0;
   history.wristsY.length = 0;
@@ -189,14 +206,26 @@ export function updateLaneGesture(
     };
   }
 
+  history.anklesY.push(metrics.anklesY);
   history.hipsY.push(metrics.hipsY);
   history.wristsY.push(metrics.wristsY);
+  trimHistory(history.anklesY);
   trimHistory(history.hipsY);
   trimHistory(history.wristsY);
 
-  const earliestHip = history.hipsY[0] ?? metrics.hipsY;
+  const previousAnkles = history.anklesY.slice(0, -1);
+  const previousHips = history.hipsY.slice(0, -1);
+  const ankleBaseline = previousAnkles.length ? Math.max(...previousAnkles) : metrics.anklesY;
+  const hipBaseline = previousHips.length ? Math.max(...previousHips) : metrics.hipsY;
+  const ankleLift = ankleBaseline - metrics.anklesY;
+  const hipLift = hipBaseline - metrics.hipsY;
+  const ankleLiftThreshold = Math.max(JUMP_MIN_ANKLE_DELTA, metrics.torsoHeight * JUMP_ANKLE_RATIO);
+  const hipLiftThreshold = Math.max(JUMP_MIN_HIP_DELTA, metrics.torsoHeight * JUMP_HIP_RATIO);
   const jumpTriggered =
-    earliestHip - metrics.hipsY > JUMP_DELTA_THRESHOLD &&
+    previousAnkles.length >= JUMP_HISTORY_MIN_SAMPLES - 1 &&
+    previousHips.length >= JUMP_HISTORY_MIN_SAMPLES - 1 &&
+    ankleLift > ankleLiftThreshold &&
+    hipLift > hipLiftThreshold &&
     nowMs - history.lastJumpTime > JUMP_COOLDOWN_MS;
 
   if (jumpTriggered) {
@@ -244,15 +273,17 @@ export function drawDebugCameraPreview({
   context.fillStyle = 'rgba(12, 16, 27, 0.14)';
   context.fillRect(0, 0, width, height);
 
-  context.save();
-  context.setLineDash([8, 6]);
-  context.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-  context.lineWidth = 2;
-  context.beginPath();
-  context.moveTo(width / 2, 0);
-  context.lineTo(width / 2, height);
-  context.stroke();
-  context.restore();
+  if (assignments.length >= 2) {
+    context.save();
+    context.setLineDash([8, 6]);
+    context.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(width / 2, 0);
+    context.lineTo(width / 2, height);
+    context.stroke();
+    context.restore();
+  }
 
   assignments.forEach(({ laneIndex, pose }) => {
     const color = laneColors[laneIndex];

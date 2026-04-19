@@ -625,6 +625,16 @@ button {
   display: none;
 }
 
+.camera-source-video {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 @media (max-width: 920px) {
   .game-stage {
     width: min(calc(100vw - 12px), calc((100svh - 12px) * var(--video-ratio)));
