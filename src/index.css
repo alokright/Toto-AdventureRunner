@@ -1,0 +1,481 @@
+:root {
+  color-scheme: light;
+  --video-ratio: 1.3428571429;
+  --ink-strong: #4b3352;
+  --ink-soft: rgba(75, 51, 82, 0.78);
+  --shadow-soft: 0 22px 60px rgba(117, 68, 111, 0.24);
+  --shadow-ui: 0 10px 24px rgba(82, 63, 108, 0.18);
+  font-family: "Avenir Next Rounded", "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+  background: #fde0dd;
+  color: var(--ink-strong);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+.loading-shell,
+.game-shell {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+  overflow: hidden;
+}
+
+.loading-shell {
+  display: grid;
+  place-items: end center;
+  padding: clamp(20px, 3vw, 36px);
+  background:
+    linear-gradient(180deg, rgba(255, 248, 242, 0.18), rgba(252, 168, 175, 0.22)),
+    url('/loading/boot-screen.png') center / cover no-repeat;
+}
+
+.loading-shell::before,
+.game-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.42), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(255, 228, 163, 0.24), transparent 28%);
+  pointer-events: none;
+}
+
+.loading-panel {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 540px);
+  padding: clamp(22px, 3vw, 32px);
+  border-radius: 32px;
+  background: rgba(255, 250, 245, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: 0 24px 60px rgba(105, 59, 86, 0.22);
+  backdrop-filter: blur(14px);
+}
+
+.loading-kicker {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #f27672;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.loading-panel h1 {
+  margin: 16px 0 0;
+  font-size: clamp(2rem, 4vw, 3.35rem);
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+}
+
+.loading-panel p {
+  margin: 12px 0 0;
+  max-width: 28rem;
+  color: var(--ink-soft);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.loading-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.loading-tags span,
+.hud-hint span {
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.loading-bar {
+  position: relative;
+  margin-top: 22px;
+  height: 28px;
+}
+
+.loading-bar__track,
+.loading-bar__fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+}
+
+.loading-bar__track {
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 3px 12px rgba(250, 182, 87, 0.16);
+}
+
+.loading-bar__fill {
+  max-width: 100%;
+  min-width: 18px;
+  background: linear-gradient(90deg, #8d63ff 0%, #ff75b3 52%, #ffcf4d 100%);
+  box-shadow: 0 10px 22px rgba(255, 117, 179, 0.3);
+  transition: width 260ms ease;
+}
+
+.loading-bar__spark {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+  font-size: 1.25rem;
+  line-height: 1;
+  transition: left 260ms ease;
+}
+
+.loading-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.loading-meta strong {
+  color: #f27672;
+  font-size: 1rem;
+}
+
+.loading-error {
+  color: #b74a55;
+}
+
+.loading-button,
+.hud-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50px;
+  padding: 0 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  transition:
+    transform 140ms ease,
+    filter 140ms ease;
+}
+
+.loading-button {
+  margin-top: 18px;
+  width: 100%;
+  background: linear-gradient(180deg, #ffba61 0%, #ff8c67 100%);
+  color: white;
+  box-shadow: 0 16px 30px rgba(255, 146, 92, 0.28);
+}
+
+.hud-action {
+  background: rgba(255, 255, 255, 0.86);
+  color: #f27672;
+  box-shadow: var(--shadow-ui);
+  pointer-events: auto;
+}
+
+.loading-button:hover,
+.hud-action:hover,
+.control-button:hover {
+  filter: brightness(1.04);
+}
+
+.loading-button:active,
+.hud-action:active,
+.control-button:active {
+  transform: scale(0.97);
+}
+
+.game-shell {
+  display: grid;
+  place-items: center;
+  padding: clamp(8px, 1.4vw, 16px);
+  background:
+    linear-gradient(180deg, rgba(254, 242, 233, 0.12), rgba(255, 177, 181, 0.2)),
+    url('/loading/boot-screen.png') center / cover no-repeat;
+}
+
+.game-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(16px);
+  background: rgba(255, 248, 245, 0.2);
+}
+
+.game-stage {
+  position: relative;
+  z-index: 1;
+  width: min(calc(100vw - 16px), calc((100svh - 16px) * var(--video-ratio)));
+  height: min(calc(100svh - 16px), calc((100vw - 16px) / var(--video-ratio)));
+  aspect-ratio: 752 / 560;
+  overflow: hidden;
+  border-radius: 28px;
+  border: 3px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 28px 70px rgba(91, 53, 96, 0.26);
+  background: linear-gradient(180deg, #ffe4d4 0%, #ffc7bf 100%);
+  touch-action: none;
+}
+
+.game-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud-row {
+  position: absolute;
+  inset-inline: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: clamp(12px, 2vw, 22px);
+  pointer-events: none;
+}
+
+.hud-row--top {
+  top: 0;
+}
+
+.hud-row--bottom {
+  bottom: 0;
+  align-items: flex-end;
+}
+
+.hud-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hud-cluster--right {
+  justify-content: flex-end;
+}
+
+.hud-pill {
+  min-width: 128px;
+  padding: 12px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  background: rgba(255, 253, 248, 0.84);
+  box-shadow: var(--shadow-ui);
+}
+
+.hud-pill--primary {
+  border-color: rgba(255, 150, 138, 0.42);
+}
+
+.hud-pill--secondary {
+  border-color: rgba(116, 202, 190, 0.45);
+}
+
+.hud-pill--stage {
+  min-width: 146px;
+}
+
+.hud-pill__label {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.hud-pill__value {
+  margin-top: 4px;
+  font-size: 1.28rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.control-panel,
+.hud-hint {
+  pointer-events: auto;
+}
+
+.control-panel {
+  width: min(30%, 248px);
+  min-width: 190px;
+  padding: 14px;
+  border-radius: 24px;
+  background: rgba(255, 252, 247, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-ui);
+}
+
+.control-panel--primary {
+  border-color: rgba(255, 147, 126, 0.38);
+}
+
+.control-panel--secondary {
+  border-color: rgba(113, 201, 185, 0.42);
+}
+
+.control-panel__label {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.control-panel__buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.control-button {
+  min-height: 54px;
+  padding: 0 12px;
+  border-radius: 18px;
+  color: white;
+  cursor: pointer;
+  font-size: 0.98rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  box-shadow: 0 14px 24px rgba(88, 55, 94, 0.18);
+  transition:
+    transform 120ms ease,
+    filter 120ms ease;
+}
+
+.control-button--run {
+  background: linear-gradient(180deg, #ff9f7b 0%, #f56b61 100%);
+}
+
+.control-button--jump {
+  background: linear-gradient(180deg, #8b76ff 0%, #5b8dff 100%);
+}
+
+.control-button--alt-run {
+  background: linear-gradient(180deg, #5cd0ba 0%, #29a99f 100%);
+}
+
+.control-button--alt-jump {
+  background: linear-gradient(180deg, #ffc75b 0%, #ff9a58 100%);
+}
+
+.hud-hint {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-radius: 24px;
+  background: rgba(255, 252, 247, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-ui);
+  text-align: center;
+}
+
+.hud-hint strong {
+  color: var(--ink-strong);
+  font-size: 0.95rem;
+}
+
+.asset-video {
+  display: none;
+}
+
+@media (max-width: 920px) {
+  .game-stage {
+    width: min(calc(100vw - 12px), calc((100svh - 12px) * var(--video-ratio)));
+    height: min(calc(100svh - 12px), calc((100vw - 12px) / var(--video-ratio)));
+  }
+
+  .hud-row--bottom {
+    gap: 8px;
+  }
+
+  .control-panel {
+    min-width: 0;
+    width: min(34%, 220px);
+    padding: 12px;
+  }
+
+  .control-button {
+    min-height: 48px;
+  }
+}
+
+@media (max-width: 720px) {
+  .loading-shell,
+  .game-shell {
+    padding: 10px;
+  }
+
+  .loading-panel {
+    width: 100%;
+  }
+
+  .game-stage {
+    border-radius: 22px;
+  }
+
+  .hud-row {
+    padding: 10px;
+  }
+
+  .hud-row--bottom {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-panel,
+  .hud-hint {
+    width: 100%;
+  }
+
+  .hud-hint {
+    order: -1;
+  }
+}

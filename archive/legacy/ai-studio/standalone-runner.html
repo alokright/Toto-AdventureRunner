@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Runner Game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: sans-serif;
+      user-select: none;
+    }
+
+    #canvas {
+      display: block;
+      /* native video resolution, no scaling */
+    }
+
+    #controls {
+      margin-top: 16px;
+      display: flex;
+      gap: 16px;
+    }
+
+    .btn {
+      width: 120px;
+      height: 60px;
+      border: none;
+      border-radius: 12px;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 0.05s, opacity 0.05s;
+    }
+
+    .btn:active { transform: scale(0.95); opacity: 0.85; }
+
+    #btn-run  { background: #4caf50; color: #fff; }
+    #btn-jump { background: #2196f3; color: #fff; }
+
+    #score-display {
+      color: #fff;
+      font-size: 14px;
+      margin-top: 8px;
+      letter-spacing: 1px;
+    }
+
+    /* overlay shown before first interaction */
+    #overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      cursor: pointer;
+      z-index: 10;
+    }
+
+    #overlay span { font-size: 14px; margin-top: 8px; opacity: 0.7; }
+  </style>
+</head>
+<body>
+
+<div style="position:relative;">
+  <canvas id="canvas" width="752" height="560"></canvas>
+  <div id="overlay">
+    🎮 Tap to Start
+    <span>Hold RUN to move · Tap JUMP to leap</span>
+  </div>
+</div>
+
+<!-- hidden video — canvas reads frames from this -->
+<video
+  id="vid"
+  src="runner_game.mp4"
+  muted
+  playsinline
+  preload="auto"
+  style="display:none"
+></video>
+
+<div id="controls">
+  <button class="btn" id="btn-run">🏃 RUN</button>
+  <button class="btn" id="btn-jump">⬆️ JUMP</button>
+</div>
+
+<div id="score-display">SCORE: 0</div>
+
+<script>
+// ─────────────────────────────────────────────
+//  CONFIG
+// ─────────────────────────────────────────────
+const VIDEO_W = 752;
+const VIDEO_H = 560;
+
+const FLOOR_Y      = VIDEO_H - 80;   // y-pixel where ground is (tweak to match video)
+const CHAR_X       = 140;            // fixed horizontal position of character
+const CHAR_W       = 60;
+const CHAR_H       = 90;
+
+const GRAVITY      = 0.6;
+const JUMP_FORCE   = -14;
+
+// playback rates
+const RATE_IDLE    = 0.0;   // holding still
+const RATE_RUN     = 1.0;   // normal run
+const RATE_LERP    = 0.10;  // smoothing factor
+
+// ─────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const vid     = document.getElementById('vid');
+const overlay = document.getElementById('overlay');
+const scoreEl = document.getElementById('score-display');
+
+let started       = false;
+let running       = false;   // RUN button held
+let currentRate   = 0;
+let targetRate    = 0;
+
+let charY         = FLOOR_Y;
+let velY          = 0;
+let isGrounded    = true;
+
+let score         = 0;
+let lastTimestamp = 0;
+
+// ─────────────────────────────────────────────
+//  VIDEO LOOP HANDLING
+//  Seamless loop: jump currentTime back just
+//  before the actual end to avoid decode gap
+// ─────────────────────────────────────────────
+const LOOP_END   = 9.8;   // seconds — jump before true end
+const LOOP_START = 0.05;  // seconds — start slightly in to avoid first-frame blank
+
+vid.addEventListener('timeupdate', () => {
+  if (vid.currentTime >= LOOP_END) {
+    vid.currentTime = LOOP_START;
+  }
+});
+
+// Also handle native ended event as fallback
+vid.addEventListener('ended', () => {
+  vid.currentTime = LOOP_START;
+  vid.play();
+});
+
+// ─────────────────────────────────────────────
+//  START
+// ─────────────────────────────────────────────
+overlay.addEventListener('pointerdown', () => {
+  if (started) return;
+  started = true;
+  overlay.style.display = 'none';
+
+  // browsers require user gesture to play video
+  vid.currentTime = LOOP_START;
+  vid.play().then(() => {
+    vid.pause(); // start paused; playback rate controls movement
+  });
+
+  requestAnimationFrame(gameLoop);
+});
+
+// ─────────────────────────────────────────────
+//  INPUT — RUN button (hold = run, release = stop)
+// ─────────────────────────────────────────────
+const btnRun  = document.getElementById('btn-run');
+const btnJump = document.getElementById('btn-jump');
+
+function startRun()  { running = true;  targetRate = RATE_RUN; }
+function stopRun()   { running = false; targetRate = RATE_IDLE; }
+function doJump()    {
+  if (isGrounded) {
+    velY = JUMP_FORCE;
+    isGrounded = false;
+  }
+}
+
+// pointer events so it works on both mouse and touch
+btnRun.addEventListener('pointerdown',  startRun);
+btnRun.addEventListener('pointerup',    stopRun);
+btnRun.addEventListener('pointerleave', stopRun);
+btnRun.addEventListener('pointercancel',stopRun);
+
+btnJump.addEventListener('pointerdown', doJump);
+
+// keyboard fallback for desktop testing
+document.addEventListener('keydown', e => {
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') startRun();
+  if ((e.code === 'Space' || e.code === 'ArrowUp') && !e.repeat) doJump();
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') stopRun();
+});
+
+// ─────────────────────────────────────────────
+//  GAME LOOP
+// ─────────────────────────────────────────────
+function gameLoop(ts) {
+  if (!started) return;
+
+  const dt = Math.min((ts - lastTimestamp) / 1000, 0.05); // seconds, capped
+  lastTimestamp = ts;
+
+  // ── Playback rate lerp ──────────────────────
+  currentRate += (targetRate - currentRate) * RATE_LERP;
+
+  if (currentRate > 0.01) {
+    if (vid.paused) vid.play();
+    vid.playbackRate = currentRate;
+  } else {
+    if (!vid.paused) vid.pause();
+  }
+
+  // ── Physics ─────────────────────────────────
+  if (!isGrounded) {
+    velY  += GRAVITY;
+    charY += velY;
+    if (charY >= FLOOR_Y) {
+      charY      = FLOOR_Y;
+      velY       = 0;
+      isGrounded = true;
+    }
+  }
+
+  // ── Score (accumulates while running) ───────
+  if (running) {
+    score += currentRate * dt * 10;
+    scoreEl.textContent = 'SCORE: ' + Math.floor(score);
+  }
+
+  // ── Draw ─────────────────────────────────────
+  // 1. Video frame as full background
+  ctx.drawImage(vid, 0, 0, VIDEO_W, VIDEO_H);
+
+  // 2. Character placeholder — a simple colored rect.
+  //    Replace drawCharacter() with your sprite logic later.
+  drawCharacter(CHAR_X, charY, isGrounded);
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ─────────────────────────────────────────────
+//  CHARACTER DRAWING
+//  Simple block stand-in — swap with sprite sheet later
+// ─────────────────────────────────────────────
+function drawCharacter(x, groundY, grounded) {
+  const top = groundY - CHAR_H;
+
+  // shadow
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(x + CHAR_W / 2, FLOOR_Y + 6, CHAR_W * 0.45, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // body
+  ctx.save();
+  ctx.fillStyle = grounded ? '#ff5722' : '#ff9800';
+  ctx.beginPath();
+  // round rect (body)
+  roundRect(ctx, x, top + 20, CHAR_W, CHAR_H - 20, 8);
+  ctx.fill();
+
+  // head
+  ctx.fillStyle = '#ffe0b2';
+  ctx.beginPath();
+  ctx.ellipse(x + CHAR_W / 2, top + 14, 20, 20, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.ellipse(x + CHAR_W / 2 - 6, top + 10, 3, 4, 0, 0, Math.PI * 2);
+  ctx.ellipse(x + CHAR_W / 2 + 6, top + 10, 3, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // legs — animate when running
+  if (running && grounded) {
+    const t = Date.now() / 100;
+    const swing = Math.sin(t) * 10;
+    ctx.strokeStyle = '#bf360c';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    // left leg
+    ctx.beginPath();
+    ctx.moveTo(x + 15, top + CHAR_H - 5);
+    ctx.lineTo(x + 10 + swing, top + CHAR_H + 18);
+    ctx.stroke();
+    // right leg
+    ctx.beginPath();
+    ctx.moveTo(x + CHAR_W - 15, top + CHAR_H - 5);
+    ctx.lineTo(x + CHAR_W - 10 - swing, top + CHAR_H + 18);
+    ctx.stroke();
+  } else {
+    // standing legs
+    ctx.strokeStyle = '#bf360c';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + 15, top + CHAR_H - 5);
+    ctx.lineTo(x + 12, top + CHAR_H + 18);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + CHAR_W - 15, top + CHAR_H - 5);
+    ctx.lineTo(x + CHAR_W - 12, top + CHAR_H + 18);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+</script>
+</body>
+</html>

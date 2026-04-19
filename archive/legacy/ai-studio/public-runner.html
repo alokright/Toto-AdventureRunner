@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Unicorn Runner</title>
+  <link rel="icon" href="favicon.ico"/>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#000;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      min-height:100vh;
+      font-family:'Segoe UI',sans-serif;
+      user-select:none;
+    }
+
+    #mode-screen {
+      position:fixed; inset:0;
+      background:linear-gradient(160deg,#1a002e,#0d1a40);
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      gap:28px; z-index:20;
+    }
+    #mode-screen h1 { color:#fff; font-size:36px; letter-spacing:2px; }
+    #mode-screen p  { color:#aaa; font-size:14px; }
+    .mode-btn {
+      width:220px; height:70px; border:none; border-radius:16px;
+      font-size:22px; font-weight:bold; cursor:pointer; letter-spacing:1px;
+      transition:transform .1s, box-shadow .1s;
+    }
+    .mode-btn:hover { transform:scale(1.04); box-shadow:0 0 24px rgba(255,255,255,.2); }
+    #btn-1p { background:linear-gradient(135deg,#c850c0,#4158d0); color:#fff; }
+    #btn-2p { background:linear-gradient(135deg,#f7971e,#ffd200); color:#222; }
+
+    #game-wrap { position:relative; display:none; }
+    canvas { display:block; }
+
+    #overlay {
+      position:absolute; inset:0;
+      background:rgba(0,0,0,.68); color:#fff;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      font-size:22px; cursor:pointer; z-index:10;
+    }
+    #overlay span { font-size:13px; margin-top:8px; opacity:.65; }
+
+    #hud {
+      width:752px; margin-top:8px; color:#fff;
+      font-size:13px; letter-spacing:1px;
+      display:none; justify-content:space-between;
+    }
+
+    #controls {
+      margin-top:14px; display:none;
+      gap:20px; flex-wrap:wrap; justify-content:center;
+    }
+    .ctrl-group { display:flex; flex-direction:column; align-items:center; gap:6px; }
+    .ctrl-label  { color:#888; font-size:11px; letter-spacing:1px; }
+    .btn {
+      width:130px; height:60px; border:none; border-radius:12px;
+      font-size:18px; font-weight:bold; cursor:pointer;
+      touch-action:none; -webkit-tap-highlight-color:transparent;
+      transition:transform .05s, opacity .05s;
+    }
+    .btn:active  { transform:scale(.94); opacity:.82; }
+    .btn-run     { background:#4caf50; color:#fff; }
+    .btn-jump    { background:#2196f3; color:#fff; }
+    .btn-run-b   { background:#e91e63; color:#fff; }
+    .btn-jump-b  { background:#ff9800; color:#fff; }
+  </style>
+</head>
+<body>
+
+<div id="mode-screen">
+  <h1>🦄 Unicorn Runner</h1>
+  <p>Choose your game mode</p>
+  <button class="mode-btn" id="btn-1p">🦄  1 Player</button>
+  <button class="mode-btn" id="btn-2p">🦄🦄  2 Players</button>
+</div>
+
+<div id="game-wrap">
+  <canvas id="canvas" width="752" height="560"></canvas>
+  <div id="overlay">
+    🦄 Tap to Start
+    <span id="overlay-hint">Hold RUN to gallop · Tap JUMP to leap</span>
+  </div>
+</div>
+
+<div id="hud">
+  <span id="hud-left">P1: 0</span>
+  <span id="hud-stage">STAGE —</span>
+  <span id="hud-right"></span>
+</div>
+
+<div id="controls"></div>
+
+<video id="vid1" src="stage 1.mp4" muted playsinline preload="auto" style="display:none"></video>
+<video id="vid2" src="stage 2.mp4" muted playsinline preload="auto" style="display:none"></video>
+<video id="vid3" src="stage 3.mp4" muted playsinline preload="auto" style="display:none"></video>
+
+<script>
+// ───────────────────────────────────────────────
+//  SPRITE CONFIG
+// ───────────────────────────────────────────────
+const SPR_W  = 486;   // px per frame in sheet
+const SPR_H  = 1190;
+const DRAW_W = 190;   // drawn size on canvas — adjust to fit your video ground
+const DRAW_H = Math.round(DRAW_W * SPR_H / SPR_W);  // ~468px, keeps aspect
+
+const ANIM_DEF = {
+  mama: {
+    idle:     { src:'mama_idle.png',     frames:20, fps:14, loop:true  },
+    startrun: { src:'mama_startrun.png', frames:21, fps:18, loop:false },
+    jump:     { src:'mama_jump.png',     frames:42, fps:20, loop:false },
+  },
+  baby: {
+    idle:     { src:'baby_idle.png',     frames:25, fps:14, loop:true  },
+    startrun: { src:'baby_startrun.png', frames:22, fps:18, loop:false },
+    jump:     { src:'baby_jump.png',     frames:42, fps:20, loop:false },
+  }
+};
+
+// Preload all sheets up front
+const SHEETS = {};
+for (const [char, anims] of Object.entries(ANIM_DEF)) {
+  SHEETS[char] = {};
+  for (const [name, def] of Object.entries(anims)) {
+    const img = new Image();
+    img.src = def.src;
+    SHEETS[char][name] = img;
+  }
+}
+
+// ───────────────────────────────────────────────
+//  VIDEO STAGE MACHINE
+// ───────────────────────────────────────────────
+const VIDEO_W = 752, VIDEO_H = 560;
+const S1_END=9.75, S2_END=4.88, S3_END=4.23, LOOP_IN=0.05;
+const MIN_RATE = 0.0625;
+
+const VS = { INTRO:'intro', A:'loopA', B:'loopB' };
+const vids = {
+  [VS.INTRO]: document.getElementById('vid1'),
+  [VS.A]:     document.getElementById('vid2'),
+  [VS.B]:     document.getElementById('vid3'),
+};
+let vstage    = VS.INTRO;
+let activeVid = vids[VS.INTRO];
+const vPend   = { vid1:false, vid2:false, vid3:false };
+
+function safePlay(v) {
+  const k=v.id; if(vPend[k]||!v.paused) return;
+  vPend[k]=true; v.play().then(()=>vPend[k]=false).catch(()=>vPend[k]=false);
+}
+function safePause(v) {
+  if(vPend[v.id]) return; if(!v.paused) v.pause();
+}
+function switchVStage(next) {
+  safePause(activeVid);
+  vstage=next; activeVid=vids[vstage];
+  activeVid.currentTime=LOOP_IN;
+  document.getElementById('hud-stage').textContent=
+    {[VS.INTRO]:'STAGE 1',[VS.A]:'STAGE 2',[VS.B]:'STAGE 3'}[vstage];
+  if(players.some(p=>p.runHeld)){ activeVid.playbackRate=1; safePlay(activeVid); }
+}
+vids[VS.INTRO].addEventListener('timeupdate',()=>{ if(vids[VS.INTRO].currentTime>=S1_END) switchVStage(VS.A); });
+vids[VS.A].addEventListener('timeupdate',    ()=>{ if(vids[VS.A].currentTime>=S2_END)     switchVStage(VS.B); });
+vids[VS.B].addEventListener('timeupdate',    ()=>{ if(vids[VS.B].currentTime>=S3_END)     switchVStage(VS.A); });
+vids[VS.INTRO].addEventListener('ended', ()=>switchVStage(VS.A));
+vids[VS.A].addEventListener('ended',     ()=>switchVStage(VS.B));
+vids[VS.B].addEventListener('ended',     ()=>switchVStage(VS.A));
+
+// ───────────────────────────────────────────────
+//  PLAYER  — state machine + physics + sprite
+// ───────────────────────────────────────────────
+const PS       = { IDLE:'idle', STARTRUN:'startrun', JUMP:'jump' };
+const FLOOR_Y  = VIDEO_H - 30;  // ground anchor — character bottom sits here
+const GRAVITY  = 0.65;
+const JUMP_F   = -16;
+const LERP     = 0.12;
+
+class Player {
+  constructor(char, x) {
+    this.char  = char;
+    this.x     = x;
+    this.y     = FLOOR_Y;
+    this.velY  = 0;
+    this.grounded = true;
+
+    this.runHeld     = false;
+    this.currentRate = 0;
+    this.score       = 0;
+
+    this.state     = PS.IDLE;
+    this.frame     = 0;
+    this.frameTick = 0;   // ms accumulator
+    this.animDone  = false;
+  }
+
+  get def() { return ANIM_DEF[this.char][this.state]; }
+  get img() { return SHEETS[this.char][this.state]; }
+
+  pressRun()   { this.runHeld = true; }
+  releaseRun() { this.runHeld = false; }
+
+  pressJump() {
+    if (!this.grounded) return;
+    // Jump requires running — force runHeld on so world keeps moving
+    this.runHeld  = true;
+    this.velY     = JUMP_F;
+    this.grounded = false;
+    this._go(PS.JUMP);
+  }
+
+  _go(s) {
+    if (this.state === s) return;
+    this.state = s; this.frame = 0;
+    this.frameTick = 0; this.animDone = false;
+  }
+
+  update(dt) {
+    // Rate lerp
+    const target = this.runHeld ? 1.0 : 0;
+    this.currentRate += (target - this.currentRate) * LERP;
+    const moving = this.currentRate > 0.02;
+
+    // State transitions
+    if (this.grounded) {
+      if (this.state === PS.JUMP) {
+        // just landed — go to run or idle depending on whether button held
+        this._go(moving ? PS.STARTRUN : PS.IDLE);
+      } else if (moving && this.state === PS.IDLE) {
+        this._go(PS.STARTRUN);
+      } else if (moving && this.state === PS.STARTRUN && this.animDone) {
+        // startrun finished one cycle — loop it as our run animation
+        this.frame = 0; this.frameTick = 0; this.animDone = false;
+      } else if (!moving && this.state !== PS.IDLE) {
+        this._go(PS.IDLE);
+      }
+    }
+
+    // Physics
+    if (!this.grounded) {
+      this.velY += GRAVITY;
+      this.y    += this.velY;
+      if (this.y >= FLOOR_Y) {
+        this.y = FLOOR_Y; this.velY = 0; this.grounded = true;
+      }
+    }
+
+    // Advance animation frame
+    const def = this.def;
+    this.frameTick += dt * 1000;
+    const msf = 1000 / def.fps;
+    while (this.frameTick >= msf) {
+      this.frameTick -= msf;
+      if (this.frame < def.frames - 1) {
+        this.frame++;
+      } else {
+        if (def.loop) { this.frame = 0; }
+        else          { this.animDone = true; } // hold last frame
+      }
+    }
+
+    // Score
+    if (this.runHeld) this.score += this.currentRate * dt * 10;
+  }
+
+  draw(ctx) {
+    const img = this.img;
+    if (!img.complete || img.naturalWidth === 0) return;
+
+    const sx = this.frame * SPR_W;
+    const dx = this.x;
+    const dy = this.y - DRAW_H;
+
+    // ground shadow
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(dx + DRAW_W/2, FLOOR_Y + 10, DRAW_W*0.38, 8, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.drawImage(img, sx, 0, SPR_W, SPR_H, dx, dy, DRAW_W, DRAW_H);
+  }
+}
+
+// ───────────────────────────────────────────────
+//  GAME STATE
+// ───────────────────────────────────────────────
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+
+let mode    = null;
+let players = [];
+let started = false;
+let lastTs  = 0;
+
+function updateVideo() {
+  const moving = players.some(p => p.currentRate > 0.02);
+  if (moving) {
+    const rate = Math.max(...players.map(p => p.currentRate));
+    activeVid.playbackRate = Math.max(MIN_RATE, rate);
+    safePlay(activeVid);
+  } else {
+    safePause(activeVid);
+  }
+}
+
+// ───────────────────────────────────────────────
+//  MODE SELECT
+// ───────────────────────────────────────────────
+document.getElementById('btn-1p').addEventListener('click', () => chooseMode('1p'));
+document.getElementById('btn-2p').addEventListener('click', () => chooseMode('2p'));
+
+function chooseMode(m) {
+  mode = m;
+  document.getElementById('mode-screen').style.display = 'none';
+  document.getElementById('game-wrap').style.display   = 'block';
+  document.getElementById('hud').style.display         = 'flex';
+  document.getElementById('controls').style.display    = 'flex';
+
+  if (mode === '1p') {
+    players = [ new Player('mama', 110) ];
+    buildUI1p();
+  } else {
+    players = [
+      new Player('mama', 40),
+      new Player('baby', 390),
+    ];
+    buildUI2p();
+  }
+}
+
+function bindBtn(id, idx) {
+  const run  = document.getElementById('run-'  + id);
+  const jump = document.getElementById('jump-' + id);
+  run.addEventListener('pointerdown',   () => players[idx]?.pressRun());
+  run.addEventListener('pointerup',     () => players[idx]?.releaseRun());
+  run.addEventListener('pointerleave',  () => players[idx]?.releaseRun());
+  run.addEventListener('pointercancel', () => players[idx]?.releaseRun());
+  jump.addEventListener('pointerdown',  () => players[idx]?.pressJump());
+}
+
+function buildUI1p() {
+  document.getElementById('hud-right').textContent = '';
+  document.getElementById('overlay-hint').textContent = 'Hold RUN to gallop · Tap JUMP to leap';
+  document.getElementById('controls').innerHTML = `
+    <div class="ctrl-group">
+      <span class="ctrl-label">🦄 MAMA</span>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-run"  id="run-p1">🏃 RUN</button>
+        <button class="btn btn-jump" id="jump-p1">⬆️ JUMP</button>
+      </div>
+    </div>`;
+  bindBtn('p1', 0);
+  document.addEventListener('keydown', e => {
+    if (e.code==='ArrowRight'||e.code==='KeyD') players[0]?.pressRun();
+    if ((e.code==='Space'||e.code==='ArrowUp')&&!e.repeat) players[0]?.pressJump();
+  });
+  document.addEventListener('keyup', e => {
+    if (e.code==='ArrowRight'||e.code==='KeyD') players[0]?.releaseRun();
+  });
+}
+
+function buildUI2p() {
+  document.getElementById('hud-right').textContent = 'P2: 0';
+  document.getElementById('overlay-hint').textContent =
+    'P1: D + Space  ·  P2: L + Enter  (or use buttons)';
+  document.getElementById('controls').innerHTML = `
+    <div class="ctrl-group">
+      <span class="ctrl-label">🦄 MAMA (P1)</span>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-run"   id="run-p1">🏃 RUN</button>
+        <button class="btn btn-jump"  id="jump-p1">⬆️ JUMP</button>
+      </div>
+    </div>
+    <div class="ctrl-group">
+      <span class="ctrl-label">🦄 BABY (P2)</span>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-run-b"  id="run-p2">🏃 RUN</button>
+        <button class="btn btn-jump-b" id="jump-p2">⬆️ JUMP</button>
+      </div>
+    </div>`;
+  bindBtn('p1', 0);
+  bindBtn('p2', 1);
+  document.addEventListener('keydown', e => {
+    if (e.code==='ArrowRight'||e.code==='KeyD') players[0]?.pressRun();
+    if ((e.code==='Space'||e.code==='ArrowUp')&&!e.repeat) players[0]?.pressJump();
+    if (e.code==='KeyL') players[1]?.pressRun();
+    if (e.code==='Enter'&&!e.repeat) players[1]?.pressJump();
+  });
+  document.addEventListener('keyup', e => {
+    if (e.code==='ArrowRight'||e.code==='KeyD') players[0]?.releaseRun();
+    if (e.code==='KeyL') players[1]?.releaseRun();
+  });
+}
+
+// ───────────────────────────────────────────────
+//  TAP TO START
+// ───────────────────────────────────────────────
+overlay.addEventListener('pointerdown', () => {
+  if (started || !mode) return;
+  started = true;
+  overlay.style.display = 'none';
+
+  // Unlock all 3 videos in one gesture
+  Object.values(vids).forEach(v => {
+    v.muted=true; v.currentTime=LOOP_IN; v.playbackRate=MIN_RATE;
+    const p=v.play();
+    if(p) p.then(()=>{ if(v!==activeVid) v.pause(); }).catch(()=>{});
+  });
+
+  requestAnimationFrame(gameLoop);
+});
+
+// ───────────────────────────────────────────────
+//  FROZEN FRAME BUFFER
+//  When video is paused (idle), we still need to
+//  repaint the background each frame so sprite
+//  draws don't leave ghost trails. We keep an
+//  offscreen canvas that captures the last live
+//  video frame and blit from it when paused.
+// ───────────────────────────────────────────────
+const frozenCanvas  = document.createElement('canvas');
+frozenCanvas.width  = VIDEO_W;
+frozenCanvas.height = VIDEO_H;
+const frozenCtx     = frozenCanvas.getContext('2d');
+let   hasFrozenFrame = false;
+
+function captureFreeze() {
+  if (activeVid.readyState >= 2) {
+    frozenCtx.drawImage(activeVid, 0, 0, VIDEO_W, VIDEO_H);
+    hasFrozenFrame = true;
+  }
+}
+
+// ───────────────────────────────────────────────
+//  GAME LOOP
+// ───────────────────────────────────────────────
+function gameLoop(ts) {
+  if (!started) return;
+  const dt = Math.min((ts - lastTs) / 1000, 0.05);
+  lastTs = ts;
+
+  players.forEach(p => p.update(dt));
+  updateVideo();
+
+  // HUD
+  document.getElementById('hud-left').textContent  = 'P1: ' + Math.floor(players[0]?.score ?? 0);
+  if (players[1]) document.getElementById('hud-right').textContent = 'P2: ' + Math.floor(players[1].score);
+
+  // Draw background — always paint something so sprites never trail
+  const moving = players.some(p => p.currentRate > 0.02);
+  if (moving && activeVid.readyState >= 2) {
+    // Live video frame — also keep frozen buffer current
+    ctx.drawImage(activeVid, 0, 0, VIDEO_W, VIDEO_H);
+    captureFreeze();
+  } else if (!moving && hasFrozenFrame) {
+    // Blit frozen frame every tick → clears previous sprite draw
+    ctx.drawImage(frozenCanvas, 0, 0);
+  } else {
+    ctx.fillStyle='#111'; ctx.fillRect(0,0,VIDEO_W,VIDEO_H);
+  }
+
+  // Draw characters
+  players.forEach(p => p.draw(ctx));
+
+  requestAnimationFrame(gameLoop);
+}
+</script>
+</body>
+</html>

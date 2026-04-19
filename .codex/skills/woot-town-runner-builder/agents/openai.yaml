@@ -1,0 +1,4 @@
+interface:
+  display_name: "Woot Town Runner Builder"
+  short_description: "Build and polish the Woot Town Runner game"
+  default_prompt: "Use $woot-town-runner-builder to extend or review the Woot Town Runner gameplay, assets, or docs."
